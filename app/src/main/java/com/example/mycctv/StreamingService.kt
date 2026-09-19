@@ -135,6 +135,14 @@ class StreamingService : Service(), ConnectChecker {
             return
         }
 
+        // Audio: bitrate (bits/s), sampleRate (Hz), isStereo, echoCanceler, noiseSuppressor
+        val audioPrepared = server.prepareAudio(128_000, 44100, true, false, false)
+        if (!audioPrepared) {
+            Log.e(TAG, "prepareAudio failed: this phone could not start the AAC encoder")
+            // Don't return here if you want video-only fallback instead of failing hard.
+            // return
+        }
+
         acquireLocks()
         server.startStream()
         Log.e(TAG, "RTSP server started on port $currentPort")   // Log.e on purpose: always visible
