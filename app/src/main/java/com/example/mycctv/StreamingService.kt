@@ -10,7 +10,9 @@ import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -18,6 +20,8 @@ import com.pedro.common.ConnectChecker
 import com.pedro.library.view.OpenGlView
 import com.pedro.rtspserver.RtspServerCamera2
 import fi.iki.elonen.NanoHTTPD
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 class StreamingService : Service(), ConnectChecker {
 
@@ -46,6 +50,55 @@ class StreamingService : Service(), ConnectChecker {
     override fun onAuthSuccess() { Log.d(TAG, "onAuthSuccess") }
 
     // ---------------------------------------------------------------- Service lifecycle
+    //switch camera functionality
+    private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile private var isSwitchingCamera = false
+    @Volatile private var usingFrontCamera = false   // track state ourselves
+    private val _isSwitchingCameraFlow = MutableStateFlow(false)
+    val isSwitchingCameraFlow: StateFlow<Boolean> = _isSwitchingCameraFlow
+    /**
+     * Toggles between front/back camera. Safe to call while previewing or streaming.
+     * No-op if a switch is already in progress, or if there's no active camera session.
+     */
+    fun switchCamera(onSwitched: ((front: Boolean) -> Unit)? = null) {
+        val server = rtspServerCamera2 ?: run {
+            Log.w(TAG, "switchCamera: no active camera session")
+            return
+        }
+        if (!server.isOnPreview && !server.isStreaming) {
+            Log.w(TAG, "switchCamera: not previewing or streaming, ignoring")
+            return
+        }
+        if (isSwitchingCamera) {
+            Log.w(TAG, "switchCamera: switch already in progress, ignoring")
+            return
+        }
+
+        mainHandler.post {
+            isSwitchingCamera = true
+            _isSwitchingCameraFlow.value = true
+            val goingTo = if (usingFrontCamera) "BACK" else "FRONT"
+            Log.e(TAG, "SWITCH_TIMING start -> $goingTo at ${System.currentTimeMillis()}")
+            val t0 = System.currentTimeMillis()
+            try {
+                server.switchCamera()
+                val t1 = System.currentTimeMillis()
+                Log.e(TAG, "SWITCH_TIMING server.switchCamera() call returned after ${t1 - t0}ms")
+                usingFrontCamera = !usingFrontCamera
+                onSwitched?.invoke(usingFrontCamera)
+            } catch (e: Exception) {
+                Log.e(TAG, "SWITCH_TIMING switchCamera failed after ${System.currentTimeMillis() - t0}ms: ${e.message}", e)
+            } finally {
+                isSwitchingCamera = false
+                val elapsed = System.currentTimeMillis() - t0
+                Log.e(TAG, "SWITCH_TIMING total call-site time: ${elapsed}ms")
+                mainHandler.postDelayed({ _isSwitchingCameraFlow.value = false }, (1200L - elapsed).coerceAtLeast(0))
+            }
+        }
+    }
+
+    fun isFrontCamera(): Boolean = usingFrontCamera
+    //switch camera functionality
 
     inner class LocalBinder : Binder() {
         fun getService(): StreamingService = this@StreamingService
@@ -67,6 +120,14 @@ class StreamingService : Service(), ConnectChecker {
         stopPreview()
         releaseLocks()
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        stopStreaming()
+        stopPreview()
+        releaseLocks()
+        stopSelf()
     }
 
     // ---------------------------------------------------------------- Public API

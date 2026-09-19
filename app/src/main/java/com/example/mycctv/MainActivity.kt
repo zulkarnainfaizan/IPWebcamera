@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Log.d(TAG, "onCreate")
         enableEdgeToEdge()
-        
+
         val intent = Intent(this, StreamingService::class.java)
         bindService(intent, connection, Context.BIND_AUTO_CREATE)
 
@@ -85,8 +85,12 @@ fun MainScreen(service: StreamingService?) {
     var rtspUrl by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("admin") }
     var password by remember { mutableStateOf("abcd1234") }
+    var isFrontCamera by remember { mutableStateOf(false) }
     val ipAddress = remember { NetworkUtils.getIPAddress(true) }
     val scrollState = rememberScrollState()
+
+    // inside MainScreen, where openGlViewRef / isFrontCamera are declared
+    val isSwitchingCamera by (service?.isSwitchingCameraFlow?.collectAsState() ?: remember { mutableStateOf(false) })
 
     val permissions = arrayOf(
         Manifest.permission.CAMERA,
@@ -124,7 +128,7 @@ fun MainScreen(service: StreamingService?) {
 
             // Camera Preview
             var openGlViewRef by remember { mutableStateOf<OpenGlView?>(null) }
-            
+
             LaunchedEffect(service, openGlViewRef) {
                 if (service != null && openGlViewRef != null) {
                     Log.d(TAG, "LaunchedEffect: calling service.startPreview")
@@ -156,7 +160,65 @@ fun MainScreen(service: StreamingService?) {
                         // Preview handled by LaunchedEffect
                     }
                 )
+                if (isSwitchingCamera) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                }
+
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Switch camera button - always visible under the preview
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        Log.d(TAG, "Switch camera tapped")
+                        service?.switchCamera { front -> isFrontCamera = front }
+                    },
+                    enabled = !isSwitchingCamera,
+                    // Added weight(1f) so buttons split the available width equally
+                    modifier = Modifier.weight(1f).height(56.dp)
+                ) {
+                    Text(
+                        text = if (isFrontCamera) "Back Camera" else "Front Camera",
+                        maxLines = 1
+                    )
+                }
+
+                // Changed from height to width for horizontal spacing
+                Spacer(modifier = Modifier.width(16.dp))
+
+                Button(
+                    onClick = {
+                        if (isStreaming) {
+                            service?.stopStreaming()
+                            isStreaming = false
+                        } else {
+                            service?.setCredentials(username, password)
+                            service?.startStreaming(8080)
+                            isStreaming = true
+                            rtspUrl = service?.getRtspUrl() ?: ""
+                        }
+                    },
+                    // Added weight(1f) to match the first button
+                    modifier = Modifier.weight(1f).height(56.dp)
+                ) {
+                    Text(
+                        text = if (isStreaming) "Stop Stream" else "Start Stream",
+                        maxLines = 1
+                    )
+                }
+            }
+
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -189,7 +251,7 @@ fun MainScreen(service: StreamingService?) {
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-            
+
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -201,34 +263,18 @@ fun MainScreen(service: StreamingService?) {
                     Text(text = "ONVIF: Supported (Placeholder)")
                     if (isStreaming) {
                         Text(text = "Streaming: Active", color = MaterialTheme.colorScheme.primary)
-                        Text(text = "RTSP URL: $rtspUrl", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            text = "RTSP URL: $rtspUrl",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     } else {
                         Text(text = "Streaming: Inactive", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Button(
-                onClick = {
-                    if (isStreaming) {
-                        service?.stopStreaming()
-                        isStreaming = false
-                    } else {
-                        service?.setCredentials(username, password)
-                        service?.startStreaming(8080)
-                        isStreaming = true
-                        rtspUrl = service?.getRtspUrl() ?: ""
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().height(56.dp)
-            ) {
-                Text(if (isStreaming) "Stop Streaming" else "Start Streaming")
-            }
-            
             Spacer(modifier = Modifier.height(16.dp))
-            
+
             Text(
                 text = "Configure your NVR to use the RTSP URL above.",
                 style = MaterialTheme.typography.bodyMedium,
